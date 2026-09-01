@@ -1,0 +1,17 @@
+[project]
+name = "fastapi-learning"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "anthropic>=0.120.2",
+    "asyncpg>=0.31.0",
+    "fastapi>=0.140.13",
+    "langgraph>=1.2.9",
+    "mcp>=2.0.0",
+    "pydantic-settings>=2.14.2",
+    "qdrant-client[fastembed]>=1.19.0",
+    "truststore>=0.10.4",
+    "uvicorn>=0.51.0",
+]
