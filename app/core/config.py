@@ -12,6 +12,12 @@ class Settings(BaseSettings):
     anthropic_api_key: str | None = None
     anthropic_model: str = "claude-sonnet-5"
 
+    # Attaches TraceMiddleware to the deepagents engine — logs every model
+    # call and tool call, and provides the breakpoint surface for stepping
+    # through a turn (see app/deepagents_engine/tracing.py). Set
+    # DEEPAGENTS_TRACE=false in .env to detach it.
+    deepagents_trace: bool = True
+
     postgres_host: str = "localhost"
     postgres_port: int = 5432
     postgres_db: str = "postgres"

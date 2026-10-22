@@ -12,6 +12,8 @@ from langgraph.graph.state import CompiledStateGraph
 from pydantic import BaseModel
 
 from app.agents.plan_agent import run_plan_agent
+from app.agentsdk.runner import AgentSdkTurnRunner
+from app.deepagents_engine.runner import DeepAgentsTurnRunner
 from app.core.auth import (
     SESSION_COOKIE,
     SESSION_TTL_SECONDS,
@@ -68,6 +70,16 @@ _PLAYGROUND_HTML = Path(__file__).parent / "static" / "playground.html"
 _checkpointer = InMemorySaver()
 _graph = cast(CompiledStateGraph, build_graph(get_settings(), _checkpointer))
 _runner = GraphTurnRunner(_graph, get_settings())
+
+# The same turn, executed by the Claude Agent SDK instead of LangGraph (see
+# app/agentsdk/). It implements the same GraphRunner Protocol and takes the
+# same DTOs, so the /agentsdk/* routes below are copies of the /graph/* ones
+# with only this object swapped — which is the whole point of the comparison.
+_agentsdk_runner = AgentSdkTurnRunner(get_settings())
+
+# And a third: deepagents, which is itself a LangGraph graph, so it shares
+# the checkpointer type (its own instance, since thread_ids are per-engine).
+_deepagents_runner = DeepAgentsTurnRunner(get_settings(), InMemorySaver())
 
 # SSE keepalive — our slower branches (web_search's subprocess spawn,
 # consult's separate LLM call) can take a few seconds with no node
@@ -386,6 +398,119 @@ async def graph_resume_stream(
     """
 
     stream = _runner.resume_stream_turn(
+        ConfirmationRequest(thread_id=thread_id, decision=decision, username=username)
+    )
+    return _stream_graph_events(stream, http_request)
+
+
+# --------------------------------------------------------------------------
+# The same four routes again, served by the Claude Agent SDK engine instead
+# of the LangGraph one. Identical request/response shapes — the only change
+# is _agentsdk_runner in place of _runner, which is possible because both
+# implement the GraphRunner Protocol from app/graph/public/contracts.py.
+# --------------------------------------------------------------------------
+
+
+@app.get("/agentsdk/run")
+async def agentsdk_run(
+    message: str, thread_id: str, username: Annotated[str, Depends(get_current_user)]
+) -> dict[str, object]:
+    result = await _agentsdk_runner.run_turn(
+        TurnRequest(thread_id=thread_id, message=message, username=username)
+    )
+    return _turn_result_response(result)
+
+
+@app.get("/agentsdk/resume")
+async def agentsdk_resume(
+    thread_id: str, decision: str, username: Annotated[str, Depends(get_current_user)]
+) -> dict[str, object]:
+    result = await _agentsdk_runner.resume_turn(
+        ConfirmationRequest(thread_id=thread_id, decision=decision, username=username)
+    )
+    return _turn_result_response(result)
+
+
+@app.get("/agentsdk/stream")
+async def agentsdk_stream(
+    message: str,
+    thread_id: str,
+    http_request: Request,
+    username: Annotated[str, Depends(get_current_user)],
+) -> StreamingResponse:
+    stream = _agentsdk_runner.stream_turn(
+        TurnRequest(thread_id=thread_id, message=message, username=username)
+    )
+    return _stream_graph_events(stream, http_request)
+
+
+@app.get("/agentsdk/resume/stream")
+async def agentsdk_resume_stream(
+    thread_id: str,
+    decision: str,
+    http_request: Request,
+    username: Annotated[str, Depends(get_current_user)],
+) -> StreamingResponse:
+    """Note the difference from /graph/resume/stream: here the paused turn is
+    a coroutine still parked in memory on this worker, so this call hands it
+    a decision and keeps streaming the *same* run. The graph version instead
+    starts a fresh run from the checkpointer.
+    """
+
+    stream = _agentsdk_runner.resume_stream_turn(
+        ConfirmationRequest(thread_id=thread_id, decision=decision, username=username)
+    )
+    return _stream_graph_events(stream, http_request)
+
+
+# --------------------------------------------------------------------------
+# Engine three: deepagents. Same four routes again, same swap — the only
+# runner of the three that is both a configured harness *and* a LangGraph
+# graph underneath.
+# --------------------------------------------------------------------------
+
+
+@app.get("/deepagents/run")
+async def deepagents_run(
+    message: str, thread_id: str, username: Annotated[str, Depends(get_current_user)]
+) -> dict[str, object]:
+    result = await _deepagents_runner.run_turn(
+        TurnRequest(thread_id=thread_id, message=message, username=username)
+    )
+    return _turn_result_response(result)
+
+
+@app.get("/deepagents/resume")
+async def deepagents_resume(
+    thread_id: str, decision: str, username: Annotated[str, Depends(get_current_user)]
+) -> dict[str, object]:
+    result = await _deepagents_runner.resume_turn(
+        ConfirmationRequest(thread_id=thread_id, decision=decision, username=username)
+    )
+    return _turn_result_response(result)
+
+
+@app.get("/deepagents/stream")
+async def deepagents_stream(
+    message: str,
+    thread_id: str,
+    http_request: Request,
+    username: Annotated[str, Depends(get_current_user)],
+) -> StreamingResponse:
+    stream = _deepagents_runner.stream_turn(
+        TurnRequest(thread_id=thread_id, message=message, username=username)
+    )
+    return _stream_graph_events(stream, http_request)
+
+
+@app.get("/deepagents/resume/stream")
+async def deepagents_resume_stream(
+    thread_id: str,
+    decision: str,
+    http_request: Request,
+    username: Annotated[str, Depends(get_current_user)],
+) -> StreamingResponse:
+    stream = _deepagents_runner.resume_stream_turn(
         ConfirmationRequest(thread_id=thread_id, decision=decision, username=username)
     )
     return _stream_graph_events(stream, http_request)
